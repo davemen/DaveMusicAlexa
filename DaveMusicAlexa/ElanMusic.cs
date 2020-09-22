@@ -108,8 +108,15 @@ namespace DaveMusicAlexa
                 //if there's a room then direct the music there.
                 if (room.Length > 0)
                 {
-                    //Have alexa repeat the request using Tell
-                    response = ResponseBuilder.Tell($"Playing {artist} in {room}");
+
+                    if (intentRequest.Intent.Name == "PlayMusic") {
+                        //Have alexa repeat the request using Tell
+                        response = ResponseBuilder.Tell($"Playing {artist} in {room}");
+                    }
+                    else if (intentRequest.Intent.Name == "PlayRadio") {
+                        //Have alexa repeat the request using Tell
+                        response = ResponseBuilder.Tell($"Playing {artist} radio in {room}");
+                }
 
                     //Leave the dialog open
                     response.Response.ShouldEndSession = true;
