@@ -62,7 +62,7 @@ namespace DaveMusicAlexa
             {
 
                 //Tell sends a message - use Ask to ask a question
-                response = ResponseBuilder.Tell("Welcome to Elan Music. What do you want to play?" + IPAddress);
+                response = ResponseBuilder.Tell("Welcome to Elan Music. What do you want to play?");
 
 
                 //by default the conversation ends, use ShouldEndSession = False to keep the dialog open
