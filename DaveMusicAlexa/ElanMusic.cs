@@ -10,6 +10,8 @@ using Newtonsoft.Json;
 using PrimS.Telnet;
 using RestSharp;
 using System;
+using System.IdentityModel.Tokens.Jwt;
+using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 
@@ -164,7 +166,11 @@ namespace DaveMusicAlexa
                         var request = new RestRequest();
 
                         //execute the request
-                        IRestResponse myresponse = client.Execute(request);
+                        // IRestResponse myresponse = client.Execute(request);
+
+                        //Fire and forget the API call
+                        functionCallAndForget foo = new functionCallAndForget();
+                        Task.Run(() => foo.callAPI(client, request));
 
                     }
                     catch (Exception ex)
