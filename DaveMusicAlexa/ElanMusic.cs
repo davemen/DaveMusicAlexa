@@ -82,7 +82,7 @@ namespace DaveMusicAlexa
                 var intentRequest = skillRequest.Request as IntentRequest;
 
                 //get the slots (Artist and Room)
-                if (intentRequest.Intent.Slots["Artist"].Value != null)
+                if (intentRequest.Intent.Slots["Artist"].Value != null || intentRequest.Intent.Slots["Artist"].SlotValue != null)
                 {
                     //Get the artist name
                     artist = intentRequest.Intent.Slots["Artist"].Value;
@@ -90,7 +90,7 @@ namespace DaveMusicAlexa
                     //convert first character to upper case - Required for Telnet 
                     artist = char.ToUpper(artist[0]) + artist.Substring(1);
                 }
-                if (intentRequest.Intent.Slots["Room"].Value != null)
+                if (intentRequest.Intent.Slots["Room"].Value != null || intentRequest.Intent.Slots["Room"].SlotValue != null)
                 {
                     //get the room name
                     room = intentRequest.Intent.Slots["Room"].Value;
