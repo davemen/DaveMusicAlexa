@@ -10,8 +10,7 @@ using Newtonsoft.Json;
 using PrimS.Telnet;
 using RestSharp;
 using System;
-using System.IdentityModel.Tokens.Jwt;
-using System.Linq;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Threading.Tasks;
 
@@ -25,6 +24,9 @@ namespace DaveMusicAlexa
         //Get this from SQL Azure
         public static string IPAddress = "";
 
+        // session variable
+        public static Session session = new Session();
+
 
         [FunctionName("DaveMusicFunction")]
 
@@ -35,6 +37,7 @@ namespace DaveMusicAlexa
             //log the invocation
             log.LogInformation("DaveMusic HTTP trigger function processed a request.");
 
+            
 
             //Create a new HTTP Client
             HttpClient httpclient = new HttpClient();
@@ -45,16 +48,15 @@ namespace DaveMusicAlexa
             //deserialize it into skillRequest
             var skillRequest = JsonConvert.DeserializeObject<SkillRequest>(json);
 
+            //Get the token from the account linking
+            string mytoken = skillRequest.Context.System.User.AccessToken;
+
             //check the type of request
             var requestType = skillRequest.GetRequestType();
 
-            //get the user or the person from Alexa
-            var systemInfo = skillRequest.Context.System;
-            var relevantAlexaId = systemInfo.Person?.PersonId ?? systemInfo.User.UserId;
-
-            //lookup the IPAddress for the user/person
+            //lookup the IPAddress for the user - using the AccessToken to connect to the IPAddress
             DatabaseLookup dblookup = new DatabaseLookup();
-            IPAddress = dblookup.GetIPAddress(relevantAlexaId);
+            IPAddress = dblookup.GetIPAddress(mytoken);
 
             //create a skill response to send back to Alexa
             SkillResponse response = null;
@@ -63,13 +65,18 @@ namespace DaveMusicAlexa
             if (requestType == typeof(LaunchRequest))
             {
 
-                //Tell sends a message - use Ask to ask a question
-                response = ResponseBuilder.Tell("Welcome to Elan Music. What do you want to play?");
+                //first check for ipaddress
+                if (IPAddress != "")
+                {
+
+                    //Tell sends a message - use Ask to ask a question
+                    response = ResponseBuilder.Tell("Welcome to Elan Music. What do you want to play?");
 
 
-                //by default the conversation ends, use ShouldEndSession = False to keep the dialog open
-                response.Response.ShouldEndSession = false;
-
+                    //by default the conversation ends, use ShouldEndSession = False to keep the dialog open
+                    response.Response.ShouldEndSession = false;
+                
+    
             }
             //Get the intent request
             else if (requestType == typeof(IntentRequest))
@@ -166,7 +173,7 @@ namespace DaveMusicAlexa
                         var request = new RestRequest();
 
                         //execute the request
-                        // IRestResponse myresponse = client.Execute(request);
+                       //  IRestResponse myresponse = client.Execute(request);
 
                         //Fire and forget the API call
                         functionCallAndForget foo = new functionCallAndForget();
