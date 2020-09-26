@@ -3,6 +3,7 @@ using Alexa.NET.Request;
 using Alexa.NET.Request.Type;
 using Alexa.NET.Response;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.Extensions.Logging;
@@ -10,8 +11,9 @@ using Newtonsoft.Json;
 using PrimS.Telnet;
 using RestSharp;
 using System;
-using System.Collections.Generic;
+using System.Net;
 using System.Net.Http;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading.Tasks;
 
 namespace DaveMusicAlexa
@@ -27,17 +29,16 @@ namespace DaveMusicAlexa
         // session variable
         public static Session session = new Session();
 
-
         [FunctionName("DaveMusicFunction")]
 
-        public static async Task<SkillResponse> Run(
+        public static async Task<IActionResult> Run(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = null)] HttpRequest req,
             ILogger log)
         {
             //log the invocation
             log.LogInformation("DaveMusic HTTP trigger function processed a request.");
 
-            
+
 
             //Create a new HTTP Client
             HttpClient httpclient = new HttpClient();
@@ -47,6 +48,16 @@ namespace DaveMusicAlexa
 
             //deserialize it into skillRequest
             var skillRequest = JsonConvert.DeserializeObject<SkillRequest>(json);
+
+            // Verifies that the request is a valid request from Amazon Alexa 
+            var isValid = await ValidateRequest(req, log, skillRequest);
+            if (!isValid)
+            {
+
+                return new BadRequestResult();
+            }
+
+
 
             //Get the token from the account linking
             string mytoken = skillRequest.Context.System.User.AccessToken;
@@ -70,13 +81,13 @@ namespace DaveMusicAlexa
                 {
 
                     //Tell sends a message - use Ask to ask a question
-                    response = ResponseBuilder.Tell("Welcome to Elan Music. What do you want to play?");
+                    response = ResponseBuilder.Tell("Welcome to My Music. What do you want to play?");
 
 
                     //by default the conversation ends, use ShouldEndSession = False to keep the dialog open
                     response.Response.ShouldEndSession = false;
-                
-    
+                }
+
             }
             //Get the intent request
             else if (requestType == typeof(IntentRequest))
@@ -89,62 +100,66 @@ namespace DaveMusicAlexa
                 var intentRequest = skillRequest.Request as IntentRequest;
 
                 //get the slots (Artist and Room)
-                if (intentRequest.Intent.Slots["Artist"].Value != null || intentRequest.Intent.Slots["Artist"].SlotValue != null)
+                if (intentRequest.Intent.Slots != null)
                 {
-                    //Get the artist name
-                    artist = intentRequest.Intent.Slots["Artist"].Value;
-
-                    //convert first character to upper case - Required for Telnet 
-                    artist = char.ToUpper(artist[0]) + artist.Substring(1);
-                }
-                if (intentRequest.Intent.Slots["Room"].Value != null || intentRequest.Intent.Slots["Room"].SlotValue != null)
-                {
-                    //get the room name
-                    room = intentRequest.Intent.Slots["Room"].Value;
-
-                    //remove the word "the" if it's there. Required for Telnet
-                    if (room.Substring(0, 4) == "the ")
+                    if (intentRequest.Intent.Slots["Artist"].Value != null || intentRequest.Intent.Slots["Artist"].SlotValue != null)
                     {
-                        room = room.Substring(4);
+                        //Get the artist name
+                        artist = intentRequest.Intent.Slots["Artist"].Value;
+
+                        //convert first character to upper case - Required for Telnet 
+                        artist = char.ToUpper(artist[0]) + artist.Substring(1);
+                    }
+                    if (intentRequest.Intent.Slots["Room"].Value != null || intentRequest.Intent.Slots["Room"].SlotValue != null)
+                    {
+                        //get the room name
+                        room = intentRequest.Intent.Slots["Room"].Value;
+
+                        //remove the word "the" if it's there. Required for Telnet
+                        if (room.Substring(0, 4) == "the ")
+                        {
+                            room = room.Substring(4);
+                        }
+
+                        //convert first character to upper case - Required for Telnet
+                        room = char.ToUpper(room[0]) + room.Substring(1);
                     }
 
-                    //convert first character to upper case - Required for Telnet
-                    room = char.ToUpper(room[0]) + room.Substring(1);
-                }
 
 
-
-                //if there's a room then direct the music there.
-                if (room.Length > 0)
-                {
-
-                    if (intentRequest.Intent.Name == "PlayMusic") {
-                        //Have alexa repeat the request using Tell
-                        response = ResponseBuilder.Tell($"Playing {artist} in {room}");
-                    }
-                    else if (intentRequest.Intent.Name == "PlayRadio") {
-                        //Have alexa repeat the request using Tell
-                        response = ResponseBuilder.Tell($"Playing {artist} radio in {room}");
-                }
-
-                    //Leave the dialog open
-                    response.Response.ShouldEndSession = true;
-
-
-                }
-                else
-                //no room so just change the music
-                {
-                    //have alexa repeat the command
-                    if (response.Response == null)
+                    //if there's a room then direct the music there.
+                    if (room.Length > 0)
                     {
-                        response = ResponseBuilder.Tell($"Playing {artist}");
 
-                        //leave the dialog open
+                        if (intentRequest.Intent.Name == "PlayMusic")
+                        {
+                            //Have alexa repeat the request using Tell
+                            response = ResponseBuilder.Tell($"Playing {artist} in {room}");
+                        }
+                        else if (intentRequest.Intent.Name == "PlayRadio")
+                        {
+                            //Have alexa repeat the request using Tell
+                            response = ResponseBuilder.Tell($"Playing {artist} radio in {room}");
+                        }
+
+                        //Leave the dialog open
                         response.Response.ShouldEndSession = true;
+
+
+                    }
+                    else
+                    //no room so just change the music
+                    {
+                        //have alexa repeat the command
+                        if (response.Response == null)
+                        {
+                            response = ResponseBuilder.Tell($"Playing {artist}");
+
+                            //leave the dialog open
+                            response.Response.ShouldEndSession = true;
+                        }
                     }
                 }
-
                 //Spotify request
                 if (intentRequest.Intent.Name == "PlayMusic")
                 {
@@ -173,7 +188,7 @@ namespace DaveMusicAlexa
                         var request = new RestRequest();
 
                         //execute the request
-                       //  IRestResponse myresponse = client.Execute(request);
+                        //  IRestResponse myresponse = client.Execute(request);
 
                         //Fire and forget the API call
                         functionCallAndForget foo = new functionCallAndForget();
@@ -208,6 +223,50 @@ namespace DaveMusicAlexa
                     }
 
                 }
+                else if (intentRequest.Intent.Name == "AMAZON.CancelIntent" || intentRequest.Intent.Name == "AMAZON.StopIntent")  //Stop or Cancel
+                {
+                    try
+                    {
+                        //Stop the music if asked to stop or cancel
+                        response = ResponseBuilder.Tell("Stopping Music");
+
+                        //Create new Rest Sharp Client
+                        var client = new RestClient();
+
+                        //Set the URL and the room
+                        client.BaseUrl = new Uri("https://elan-api-music.azurewebsites.net/stop?ipaddress=" + IPAddress);
+
+                        //Create new Rest Sharp Request
+                        var request = new RestRequest();
+
+                        //execute the request
+                        //  IRestResponse myresponse = client.Execute(request);
+
+                        //Fire and forget the API call
+                        functionCallAndForget foo = new functionCallAndForget();
+                        Task.Run(() => foo.callAPI(client, request));
+                        return new OkObjectResult(response);
+
+                    }
+                    catch (Exception ex)
+                    {
+                        throw ex;
+                    }
+                }
+                else if (intentRequest.Intent.Name == "AMAZON.HelpIntent")  //Stop or Cancel
+                {
+                    try
+                    {
+                        //Stop the music if asked to stop or cancel
+                        response = ResponseBuilder.Ask("Try saying something like Play Prince in the Kitchen.", null);
+                        response.Response.ShouldEndSession = false;
+                    }
+                    catch (Exception ex)
+                    {
+                        throw ex;
+                    }
+
+                }
             }
             //if the session is ending
             else if (requestType == typeof(SessionEndedRequest))
@@ -218,28 +277,92 @@ namespace DaveMusicAlexa
                 //end the dialog
                 response.Response.ShouldEndSession = true;
             }
-            return response;
+            return new OkObjectResult(response);
         }
-
-
-
-        public class Request
+        private static async Task<bool> ValidateRequest(HttpRequest request, ILogger log, SkillRequest skillRequest)
         {
-            public string ipaddress { get; set; }
-            public string Room { get; set; }
-            public string Artist { get; set; }
-            public string Service { get; set; }
+            request.Headers.TryGetValue("SignatureCertChainUrl", out var signatureChainUrl);
+            if (string.IsNullOrWhiteSpace(signatureChainUrl))
+            {
+                log.LogError("Validation failed. Empty SignatureCertChainUrl header");
+                return false;
+            }
+
+            Uri certUrl;
+            try
+            {
+                certUrl = new Uri(signatureChainUrl);
+            }
+            catch
+            {
+                log.LogError($"Validation failed. SignatureChainUrl not valid: {signatureChainUrl}");
+                return false;
+            }
+
+            request.Headers.TryGetValue("Signature", out var signature);
+            if (string.IsNullOrWhiteSpace(signature))
+            {
+                log.LogError("Validation failed - Empty Signature header");
+                return false;
+            }
+
+            request.Body.Position = 0;
+            var body = await request.ReadAsStringAsync();
+            request.Body.Position = 0;
+
+            if (string.IsNullOrWhiteSpace(body))
+            {
+                log.LogError("Validation failed - the JSON is empty");
+                return false;
+            }
+
+            bool isTimestampValid = RequestVerification.RequestTimestampWithinTolerance(skillRequest);
+            bool valid = await RequestVerification.Verify(signature, certUrl, body, GetCertificate);
+
+
+            if (!valid || !isTimestampValid)
+            {
+                log.LogError("Validation failed - RequestVerification failed");
+                return false;
+            }
+            else
+            {
+                return true;
+            }
+        }
+        public static Task<X509Certificate2> GetCertificate(Uri certificatePath)
+        {
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+            byte[] certificate = null;
+            using (var web = new WebClient())
+            {
+                certificate = web.DownloadData(certificatePath);
+            }
+            var cert = new X509Certificate2(certificate);
+            return Task.FromResult(cert);
         }
     }
-    public class functionCallAndForget
-    {
-        public void callAPI(RestClient client, RestRequest restRequest)
-        {
-            client.Execute(restRequest);
 
-        }
+
+
+    public class Request
+    {
+        public string ipaddress { get; set; }
+        public string Room { get; set; }
+        public string Artist { get; set; }
+        public string Service { get; set; }
     }
 }
+public class functionCallAndForget
+{
+    public void callAPI(RestClient client, RestRequest restRequest)
+    {
+        client.Execute(restRequest);
+
+    }
+}
+
+
 
 
 
