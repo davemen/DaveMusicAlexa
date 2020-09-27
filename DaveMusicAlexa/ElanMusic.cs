@@ -3,6 +3,7 @@ using Alexa.NET.Request;
 using Alexa.NET.Request.Type;
 using Alexa.NET.Response;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Internal;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.Http;
@@ -11,6 +12,7 @@ using Newtonsoft.Json;
 using PrimS.Telnet;
 using RestSharp;
 using System;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography.X509Certificates;
@@ -38,8 +40,6 @@ namespace DaveMusicAlexa
             //log the invocation
             log.LogInformation("DaveMusic HTTP trigger function processed a request.");
 
-
-
             //Create a new HTTP Client
             HttpClient httpclient = new HttpClient();
 
@@ -50,15 +50,11 @@ namespace DaveMusicAlexa
             var skillRequest = JsonConvert.DeserializeObject<SkillRequest>(json);
 
             // Verifies that the request is a valid request from Amazon Alexa 
-            var isValid = await ValidateRequest(req, log, skillRequest);
+            var isValid = await ValidateRequestAsync(req, skillRequest);
             if (!isValid)
             {
-
                 return new BadRequestResult();
             }
-
-
-
             //Get the token from the account linking
             string mytoken = skillRequest.Context.System.User.AccessToken;
 
@@ -279,57 +275,6 @@ namespace DaveMusicAlexa
             }
             return new OkObjectResult(response);
         }
-        private static async Task<bool> ValidateRequest(HttpRequest request, ILogger log, SkillRequest skillRequest)
-        {
-            request.Headers.TryGetValue("SignatureCertChainUrl", out var signatureChainUrl);
-            if (string.IsNullOrWhiteSpace(signatureChainUrl))
-            {
-                log.LogError("Validation failed. Empty SignatureCertChainUrl header");
-                return false;
-            }
-
-            Uri certUrl;
-            try
-            {
-                certUrl = new Uri(signatureChainUrl);
-            }
-            catch
-            {
-                log.LogError($"Validation failed. SignatureChainUrl not valid: {signatureChainUrl}");
-                return false;
-            }
-
-            request.Headers.TryGetValue("Signature", out var signature);
-            if (string.IsNullOrWhiteSpace(signature))
-            {
-                log.LogError("Validation failed - Empty Signature header");
-                return false;
-            }
-
-            request.Body.Position = 0;
-            var body = await request.ReadAsStringAsync();
-            request.Body.Position = 0;
-
-            if (string.IsNullOrWhiteSpace(body))
-            {
-                log.LogError("Validation failed - the JSON is empty");
-                return false;
-            }
-
-            bool isTimestampValid = RequestVerification.RequestTimestampWithinTolerance(skillRequest);
-            bool valid = await RequestVerification.Verify(signature, certUrl, body, GetCertificate);
-
-
-            if (!valid || !isTimestampValid)
-            {
-                log.LogError("Validation failed - RequestVerification failed");
-                return false;
-            }
-            else
-            {
-                return true;
-            }
-        }
         public static Task<X509Certificate2> GetCertificate(Uri certificatePath)
         {
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
@@ -341,6 +286,71 @@ namespace DaveMusicAlexa
             var cert = new X509Certificate2(certificate);
             return Task.FromResult(cert);
         }
+
+        private static async Task<bool> ValidateRequestAsync(HttpRequest request, SkillRequest skillRequest)
+        {
+            try
+            {
+                request.Headers.TryGetValue("SignatureCertChainUrl", out var signatureChainUrl);
+                if (string.IsNullOrWhiteSpace(signatureChainUrl))
+                {
+                    return false;
+                }
+
+                Uri certUrl;
+                try
+                {
+                    certUrl = new Uri(signatureChainUrl);
+                }
+                catch
+                {
+                    return false;
+                }
+
+                request.Headers.TryGetValue("Signature", out var signature);
+                if (string.IsNullOrWhiteSpace(signature))
+                {
+                    return false;
+                }
+
+                //// this stuff is slightly different for validating the body. Could this be the problem?
+                var body = "";
+                request.EnableRewind();
+                using (var stream = new StreamReader(request.Body))
+                {
+                    stream.BaseStream.Position = 0;
+                    body = stream.ReadToEnd();
+                    stream.BaseStream.Position = 0;
+                }
+
+                if (string.IsNullOrWhiteSpace(body))
+                {
+                    return false;
+                }
+
+                if (body ==  "") {
+                    return false;
+                }
+
+                bool isTimestampValid = RequestVerification.RequestTimestampWithinTolerance(skillRequest);
+                bool valid = await RequestVerification.Verify(signature, certUrl, body, GetCertificate);
+
+                if (!valid || !isTimestampValid)
+                {
+                    return false;
+                }
+                else
+                {
+                    return true;
+                }
+
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
     }
 
 
