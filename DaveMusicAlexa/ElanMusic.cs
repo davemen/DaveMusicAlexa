@@ -12,7 +12,9 @@ using Newtonsoft.Json;
 using PrimS.Telnet;
 using RestSharp;
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography.X509Certificates;
@@ -50,7 +52,8 @@ namespace DaveMusicAlexa
             var skillRequest = JsonConvert.DeserializeObject<SkillRequest>(json);
 
             // Verifies that the request is a valid request from Amazon Alexa 
-            var isValid = await ValidateRequestAsync(req, skillRequest);
+            var isValid = await ValidateRequestSecurity(req,, );
+            
             if (!isValid)
             {
                 return new BadRequestResult();
@@ -275,81 +278,134 @@ namespace DaveMusicAlexa
             }
             return new OkObjectResult(response);
         }
-        public static Task<X509Certificate2> GetCertificate(Uri certificatePath)
+
+        private static Dictionary<string, X509Certificate2> _validatedCertificateChains = new Dictionary<string, X509Certificate2>();
+
+        //...
+        private static async Task ValidateRequestSecurity(HttpRequestMessage httpRequest, byte[] requestBytes, AlexaRequestBody requestBody)
         {
-            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
-            byte[] certificate = null;
-            using (var web = new WebClient())
+            if (requestBody == null || requestBody.Request == null || requestBody.Request.Timestamp == null)
             {
-                certificate = web.DownloadData(certificatePath);
+                throw new InvalidOperationException("Alexa Request Invalid: Request Timestamp Missing");
             }
-            var cert = new X509Certificate2(certificate);
-            return Task.FromResult(cert);
+
+            var ts = requestBody.Request.Timestamp.Value;
+            var tsDiff = (DateTimeOffset.UtcNow - ts).TotalSeconds;
+
+            if (System.Math.Abs(tsDiff) >= 150)
+            {
+                throw new InvalidOperationException("Alexa Request Invalid: Request Timestamp outside valid range");
+            }
+
+            httpRequest.Headers.TryGetValues("SignatureCertChainUrl", out var certUrls);
+            httpRequest.Headers.TryGetValues("Signature", out var signatures);
+
+            var certChainUrl = certUrls.FirstOrDefault();
+            var signature = signatures.FirstOrDefault();
+
+            if (string.IsNullOrEmpty(certChainUrl))
+            {
+                throw new InvalidOperationException("Alexa Request Invalid: missing SignatureCertChainUrl header");
+            }
+
+            if (string.IsNullOrEmpty(signature))
+            {
+                throw new InvalidOperationException("Alexa Request Invalid: missing Signature header");
+            }
+
+            var uri = new Uri(certChainUrl);
+
+            if (uri.Scheme.ToLower() != "https")
+            {
+                throw new InvalidOperationException("Alexa Request Invalid: SignatureCertChainUrl bad scheme");
+            }
+
+            if (uri.Port != 443)
+            {
+                throw new InvalidOperationException("Alexa Request Invalid: SignatureCertChainUrl bad port");
+            }
+
+            if (uri.Host.ToLower() != "s3.amazonaws.com")
+            {
+                throw new InvalidOperationException("Alexa Request Invalid: SignatureCertChainUrl bad host");
+            }
+
+            if (!uri.AbsolutePath.StartsWith("/echo.api/"))
+            {
+                throw new InvalidOperationException("Alexa Request Invalid: SignatureCertChainUrl bad path");
+            }
+
+            X509Certificate2 signingCertificate = null;
+
+            if (!_validatedCertificateChains.ContainsKey(uri.ToString()))
+            {
+                System.Diagnostics.Trace.WriteLine("Validating cert URL: " + certChainUrl);
+
+                var certList = await PemHelper.DownloadPemCertificatesAsync(uri.ToString());
+
+                if (certList == null || certList.Length < 2)
+                {
+                    throw new InvalidOperationException("Alexa Request Invalid: SignatureCertChainUrl download failed or too few certificates");
+                }
+
+                var primaryCert = certList[0];
+
+                var subjectAlternativeNameList = PemHelper.ParseSujectAlternativeNames(primaryCert);
+
+                if (!subjectAlternativeNameList.Contains("echo-api.amazon.com"))
+                {
+                    throw new InvalidOperationException("Alexa Request Invalid: SignatureCertChainUrl certificate missing echo-api.amazon.com from Subject Alternative Names");
+                }
+
+                List<X509Certificate2> chainCerts = new List<X509Certificate2>();
+
+                for (int i = 1; i < certList.Length; i++)
+                {
+                    chainCerts.Add(certList[i]);
+                }
+
+                if (!PemHelper.ValidateCertificateChain(primaryCert, chainCerts))
+                {
+                    throw new InvalidOperationException("Alexa Request Invalid: SignatureCertChainUrl certificate chain validation failed");
+                }
+
+
+                signingCertificate = primaryCert;
+
+                lock (_validatedCertificateChains)
+                {
+                    if (!_validatedCertificateChains.ContainsKey(uri.ToString()))
+                    {
+                        System.Diagnostics.Trace.WriteLine("Adding validated cert url: " + uri.ToString());
+                        _validatedCertificateChains[uri.ToString()] = primaryCert;
+                    }
+                    else
+                    {
+                        System.Diagnostics.Trace.WriteLine("Race condition hit while adding validated cert url: " + uri.ToString());
+                    }
+                }
+            }
+            else
+            {
+                signingCertificate = _validatedCertificateChains[uri.ToString()];
+            }
+
+            if (signingCertificate == null)
+            {
+                throw new InvalidOperationException("Alexa Request Invalid: SignatureCertChainUrl certificate generic failure");
+            }
+
+
+            var signatureBytes = Convert.FromBase64String(signature);
+
+            var thing = signingCertificate.GetRSAPublicKey();
+            if (!thing.VerifyData(requestBytes, signatureBytes, System.Security.Cryptography.HashAlgorithmName.SHA1, System.Security.Cryptography.RSASignaturePadding.Pkcs1))
+            {
+                throw new InvalidOperationException("Alexa Request Invalid: Signature verification failed");
+            }
         }
 
-        private static async Task<bool> ValidateRequestAsync(HttpRequest request, SkillRequest skillRequest)
-        {
-            try
-            {
-                request.Headers.TryGetValue("SignatureCertChainUrl", out var signatureChainUrl);
-                if (string.IsNullOrWhiteSpace(signatureChainUrl))
-                {
-                    return false;
-                }
 
-                Uri certUrl;
-                try
-                {
-                    certUrl = new Uri(signatureChainUrl);
-                }
-                catch
-                {
-                    return false;
-                }
-
-                request.Headers.TryGetValue("Signature", out var signature);
-                if (string.IsNullOrWhiteSpace(signature))
-                {
-                    return false;
-                }
-
-                //// this stuff is slightly different for validating the body. Could this be the problem?
-                var body = "";
-                request.EnableRewind();
-                using (var stream = new StreamReader(request.Body))
-                {
-                    stream.BaseStream.Position = 0;
-                    body = stream.ReadToEnd();
-                    stream.BaseStream.Position = 0;
-                }
-
-                if (string.IsNullOrWhiteSpace(body))
-                {
-                    return false;
-                }
-
-                if (body ==  "") {
-                    return false;
-                }
-
-                bool isTimestampValid = RequestVerification.RequestTimestampWithinTolerance(skillRequest);
-                bool valid = await RequestVerification.Verify(signature, certUrl, body, GetCertificate);
-
-                if (!valid || !isTimestampValid)
-                {
-                    return false;
-                }
-                else
-                {
-                    return true;
-                }
-
-            }
-            catch
-            {
-                return false;
-            }
-        }
 
     }
 
